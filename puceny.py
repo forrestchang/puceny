@@ -55,7 +55,7 @@ class Document:
 
 class Token:
     """
-    表示分词后的基本单元Token。
+    表示分词后的基本元Token。
     token_str: 原始Token字符串
     """
 
@@ -134,8 +134,8 @@ class IndexWriter:
         self.inverted_index: Dict[str, Dict[str, List[int]]] = defaultdict(dict)
         self.document_store: Dict[str, Dict[str, Any]] = {}
         self.doc_count = 0
+        self.total_docs = 0  # Track total documents for progress
 
-        self.segment_count = 0
         self._load_segments_info()
 
     def _load_segments_info(self):
@@ -145,6 +145,8 @@ class IndexWriter:
                 self.segments_info = json.load(f)
         else:
             self.segments_info = {"segments": []}
+        # 根据已有段数确定segment计数器
+        self.segment_count = len(self.segments_info["segments"])
 
     def _save_segments_info(self):
         with open(self.segments_file, "w", encoding="utf-8") as f:
@@ -173,7 +175,30 @@ class IndexWriter:
             # STORED 不建立倒排索引
         self.document_store[doc_id] = doc_fields_data
 
+    def add_documents(self, documents: List[Document], show_progress: bool = True):
+        """Batch add documents with optional progress bar"""
+        self.total_docs = len(documents)
+        for i, doc in enumerate(documents, 1):
+            self.add_document(doc)
+            if show_progress:
+                self._update_progress(i, self.total_docs)
+
+    def _update_progress(self, current: int, total: int):
+        """Display progress bar in console"""
+        bar_width = 50
+        progress = current / total
+        filled = int(bar_width * progress)
+        bar = "=" * filled + "-" * (bar_width - filled)
+        percent = progress * 100
+        print(
+            f"\rProcessing documents: [{bar}] {percent:.1f}% ({current}/{total})",
+            end="",
+        )
+        if current == total:
+            print()  # New line when complete
+
     def commit(self):
+        print("\nCommitting changes...")
         # 每次commit创建新的段目录
         segment_name = f"segment_{self.segment_count:03d}"
         segment_dir = os.path.join(self.index_dir, segment_name)
@@ -206,26 +231,6 @@ class IndexWriter:
 
         print(f"已提交新段: {segment_name}")
 
-    def commit(self):
-        """
-        将内存中的索引结构写入磁盘。
-        实际中，这里会有更复杂的格式和多个文件，这里简单用 JSON 持久化示意。
-        """
-        inverted_index_path = os.path.join(self.index_dir, "inverted_index.json")
-        doc_store_path = os.path.join(self.index_dir, "document_store.json")
-
-        with open(inverted_index_path, "w", encoding="utf-8") as f:
-            # 将defaultdict转换为普通字典以便序列化
-            normal_index = {
-                term: dict(postings) for term, postings in self.inverted_index.items()
-            }
-            json.dump(normal_index, f, ensure_ascii=False, indent=2)
-
-        with open(doc_store_path, "w", encoding="utf-8") as f:
-            json.dump(self.document_store, f, ensure_ascii=False, indent=2)
-
-        print(f"索引已提交到 {self.index_dir}")
-
 
 class IndexReader:
     def __init__(self, index_dir: str):
@@ -235,45 +240,45 @@ class IndexReader:
             self.segments_info = json.load(f)
         self.segments = self.segments_info["segments"]
 
-    def _load_inverted_index(
-        self, segment_name: str
-    ) -> Dict[str, Dict[str, List[int]]]:
-        segment_dir = os.path.join(self.index_dir, segment_name)
-        inverted_index_path = os.path.join(segment_dir, "inverted_index.json")
-        with open(inverted_index_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        # 用于一次性加载所有段数据的结构
+        self.inverted_index: Dict[str, Dict[str, List[int]]] = defaultdict(dict)
+        self.doc_store: Dict[str, Dict[str, Any]] = {}
 
-    def _load_document_store(self, segment_name: str) -> Dict[str, Dict[str, Any]]:
-        segment_dir = os.path.join(self.index_dir, segment_name)
-        doc_store_path = os.path.join(segment_dir, "document_store.json")
-        with open(doc_store_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        # 加载所有段的数据到内存
+        for seg in self.segments:
+            seg_name = seg["name"]
+            segment_dir = os.path.join(self.index_dir, seg_name)
+            inv_idx_path = os.path.join(segment_dir, "inverted_index.json")
+            doc_store_path = os.path.join(segment_dir, "document_store.json")
+
+            if os.path.exists(inv_idx_path):
+                with open(inv_idx_path, "r", encoding="utf-8") as f:
+                    inv_idx = json.load(f)
+                for term, postings in inv_idx.items():
+                    for doc_id, positions in postings.items():
+                        if doc_id not in self.inverted_index[term]:
+                            self.inverted_index[term][doc_id] = positions
+                        else:
+                            self.inverted_index[term][doc_id].extend(positions)
+
+            if os.path.exists(doc_store_path):
+                with open(doc_store_path, "r", encoding="utf-8") as f:
+                    ds = json.load(f)
+                self.doc_store.update(ds)
+
+        self.total_doc_count = len(self.doc_store)
+
+        # 预计算每个term的doc_freq
+        self.term_doc_freq: Dict[str, int] = {
+            term: len(postings) for term, postings in self.inverted_index.items()
+        }
 
     def terms_docs(self, term: str) -> Dict[str, List[int]]:
-        """
-        返回包含term的所有文档ID和位置信息的合并结果。
-        """
-        result = {}
-        for seg in self.segments:
-            segment_name = seg["name"]
-            inverted_index = self._load_inverted_index(segment_name)
-            if term in inverted_index:
-                for doc_id, positions in inverted_index[term].items():
-                    if doc_id not in result:
-                        result[doc_id] = positions
-                    else:
-                        # 合并位置可选，这里简单附加
-                        result[doc_id].extend(positions)
-        return result
+        # 现在直接从内存返回，无需文件I/O
+        return self.inverted_index.get(term, {})
 
     def get_document(self, doc_id: str) -> Dict[str, Any]:
-        # 在每个segment中查找文档存储
-        for seg in self.segments:
-            segment_name = seg["name"]
-            doc_store = self._load_document_store(segment_name)
-            if doc_id in doc_store:
-                return doc_store[doc_id]
-        return {}
+        return self.doc_store.get(doc_id, {})
 
 
 class Query:
@@ -288,32 +293,49 @@ class Searcher:
         self.reader = reader
         self.analyzer = analyzer
 
-    def search(self, query: Query) -> List[str]:
-        # 解析查询词
-        # 对每个term进行同样的分析处理以保证一致性
+    def search_with_scores(self, query: Query) -> List[tuple[str, float]]:
+        # 对查询词进行分析
         normalized_terms = []
         for t in query.terms:
-            # 对查询进行分析（简单化，可只小写处理）
-            # 在这里使用analyzer可复杂化查询分析步骤
             analyzed = self.analyzer.analyze(t)
             normalized_terms.extend(analyzed)
 
         if not normalized_terms:
             return []
 
-        docs_sets = []
+        doc_scores: Dict[str, float] = defaultdict(float)
+        total_docs = self.reader.total_doc_count
+
         for term in normalized_terms:
-            docs = set(self.reader.terms_docs(term).keys())
-            docs_sets.append(docs)
+            term_docs = self.reader.terms_docs(term)  # 现在是内存访问
+            if term_docs:
+                doc_freq = self.reader.term_doc_freq.get(term, 0)
+                # 根据doc_freq和total_docs计算IDF
+                # （这里的idf计算公式可以随需要调整）
+                idf = 1.0 + (total_docs - doc_freq + 0.5) / (doc_freq + 0.5)
 
+                for doc_id, positions in term_docs.items():
+                    tf = len(positions)
+                    score = tf * idf
+                    doc_scores[doc_id] += score
+
+        # AND逻辑过滤
         if query.operator == "AND":
-            # 取交集
-            result_docs = set.intersection(*docs_sets)
-        else:
-            # 默认OR, 取并集
-            result_docs = set.union(*docs_sets)
+            for doc_id in list(doc_scores.keys()):
+                # 确保该doc_id包含所有查询词
+                for term in normalized_terms:
+                    if doc_id not in self.reader.terms_docs(term):
+                        del doc_scores[doc_id]
+                        break
 
-        return list(result_docs)
+        scored_docs = [(doc_id, score) for doc_id, score in doc_scores.items()]
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        return scored_docs
+
+    def search(self, query: Query) -> List[str]:
+        # 保持原有的search方法，但使用search_with_scores实现
+        scored_docs = self.search_with_scores(query)
+        return [doc_id for doc_id, _ in scored_docs]
 
 
 class IndexMerger:
@@ -337,13 +359,15 @@ class IndexMerger:
         for seg in segments:
             seg_name = seg["name"]
             segment_dir = os.path.join(self.index_dir, seg_name)
-            with open(
-                os.path.join(segment_dir, "inverted_index.json"), "r", encoding="utf-8"
-            ) as f:
+            inv_idx_path = os.path.join(segment_dir, "inverted_index.json")
+            doc_store_path = os.path.join(segment_dir, "document_store.json")
+
+            if not os.path.exists(inv_idx_path) or not os.path.exists(doc_store_path):
+                continue
+
+            with open(inv_idx_path, "r", encoding="utf-8") as f:
                 inv_idx = json.load(f)
-            with open(
-                os.path.join(segment_dir, "document_store.json"), "r", encoding="utf-8"
-            ) as f:
+            with open(doc_store_path, "r", encoding="utf-8") as f:
                 doc_store = json.load(f)
 
             # 合并倒排索引
@@ -359,7 +383,6 @@ class IndexMerger:
                 if doc_id not in merged_doc_store:
                     merged_doc_store[doc_id] = fields
                 else:
-                    # 理论上不会出现同id两次的情况，如果出现则以最新为准
                     merged_doc_store[doc_id].update(fields)
 
         # 写入新段
@@ -375,8 +398,7 @@ class IndexMerger:
         ) as f:
             json.dump(merged_doc_store, f, ensure_ascii=False, indent=2)
 
-        # 更新segments文件
-        # 合并完成后只保留这个新段的信息
+        # 更新segments文件, 只保留新合并段
         new_segments_info = {
             "segments": [{"name": new_segment_name, "doc_count": len(merged_doc_store)}]
         }
@@ -395,3 +417,36 @@ class IndexMerger:
 
         print(f"合并完成，新段：{new_segment_name}")
 
+
+# 以下为简单的测试示例（可根据需要删除或修改）
+if __name__ == "__main__":
+    analyzer = Analyzer()
+    writer = IndexWriter("puceny_index", analyzer)
+    doc1 = Document("1")
+    doc1.add_field(Field("title", "Lucene in Action", FieldType.TEXT))
+    doc1.add_field(Field("author", "Erik Hatcher", FieldType.KEYWORD))
+    doc1.add_field(
+        Field(
+            "content",
+            "Lucene is a powerful Java library used for implementing search.",
+            FieldType.TEXT,
+        )
+    )
+    writer.add_document(doc1)
+
+    doc2 = Document("2")
+    doc2.add_field(Field("title", "Learning Python", FieldType.TEXT))
+    doc2.add_field(Field("author", "Mark Lutz", FieldType.KEYWORD))
+    doc2.add_field(
+        Field("content", "Python is easy to learn and powerful.", FieldType.TEXT)
+    )
+    writer.add_document(doc2)
+    writer.commit()
+
+    reader = IndexReader("puceny_index")
+    searcher = Searcher(reader, analyzer)
+    q = Query(["Lucene", "python"], operator="OR")
+    results = searcher.search(q)
+    print("查询结果文档ID列表：", results)
+    for doc_id in results:
+        print("DocID:", doc_id, "原文:", reader.get_document(doc_id))
