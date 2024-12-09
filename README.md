@@ -40,6 +40,10 @@ Install the required packages:
 pip install beautifulsoup4 PyPDF2 flask
 ```
 
+## Architecture
+
+![puceny architecture](./architecture.png)
+
 ## Directory Structure
 
 - `puceny.py`: The main indexing and searching implementation (Analyzer, IndexWriter, IndexReader, Searcher, etc.).
