@@ -122,7 +122,7 @@ HTML_TEMPLATE = """
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>搜索页面</title>
+    <title>Search Engine</title>
     <style>
         .result-item { 
             margin-bottom: 30px;
@@ -175,29 +175,29 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
-    <h1>简易搜索引擎</h1>
+    <h1>puceny: Simple Local Search Engine</h1>
     <form method="POST" action="/rebuild_index">
-        <button type="submit" class="rebuild-button">重建索引</button>
+        <button type="submit" class="rebuild-button">Rebuild Index</button>
     </form>
     {% if benchmark_data %}
     <div class="benchmark">
-        <h3>索引重建信息：</h3>
-        <p>处理文件数：{{ benchmark_data.file_count }}</p>
-        <p>索引构建时间：{{ "%.2f"|format(benchmark_data.build_time) }} 秒</p>
-        <p>索引大小：{{ benchmark_data.index_size }}</p>
+        <h3>Index Build Information:</h3>
+        <p>Files Processed: {{ benchmark_data.file_count }}</p>
+        <p>Build Time: {{ "%.2f"|format(benchmark_data.build_time) }} seconds</p>
+        <p>Index Size: {{ benchmark_data.index_size }}</p>
     </div>
     {% endif %}
     <form method="GET" action="/">
-        <input type="text" name="q" placeholder="请输入搜索关键词" value="{{query|e}}" style="width: 300px; padding: 5px;">
-        <input type="submit" value="搜索">
+        <input type="text" name="q" placeholder="Enter search keywords" value="{{query|e}}" style="width: 300px; padding: 5px;">
+        <input type="submit" value="Search">
     </form>
     {% if metadata %}
     <div class="metadata">
-        找到 {{ metadata.result_count }} 个结果 (用时 {{ "%.3f"|format(metadata.search_time) }} 秒)
+        Found {{ metadata.result_count }} results ({{ "%.3f"|format(metadata.search_time) }} seconds)
     </div>
     {% endif %}
     {% if results is not none %}
-        <h2>搜索结果：</h2>
+        <h2>Search Results:</h2>
         {% if results %}
             {% for result in results %}
             <div class="result-item">
@@ -208,7 +208,7 @@ HTML_TEMPLATE = """
             </div>
             {% endfor %}
         {% else %}
-            <p>没有找到相关结果</p>
+            <p>No results found</p>
         {% endif %}
     {% endif %}
 </body>

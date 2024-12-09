@@ -2,6 +2,8 @@
 
 **puceny** is a simplified search engine prototype that indexes and searches documents from a local directory. It supports reading text from files (such as `.txt`, `.md`, `.html`, `.pdf`), building an inverted index, and then performing keyword queries using a simple scoring method. Additionally, there's a Flask-based web UI to interact with the index.
 
+![puceny search engine](./cover.png)
+
 ## Features
 
 - **Indexing Local Documents**:  
